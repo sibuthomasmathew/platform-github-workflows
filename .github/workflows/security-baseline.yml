@@ -1,0 +1,68 @@
+name: Security Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      severity:
+        description: "Comma-separated Trivy severity levels that fail the scan (e.g. CRITICAL,HIGH,MEDIUM)"
+        type: string
+        default: CRITICAL,HIGH
+    secrets:
+      GITLEAKS_LICENSE:
+        description: "Gitleaks license key (required for organisation repositories)"
+        required: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secret Scan - Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  trivy:
+    name: Vulnerability and IaC Scan - Trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .trivy-cache
+          key: trivy-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: trivy-${{ runner.os }}-
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          exit-code: 1
+          severity: ${{ inputs.severity || 'CRITICAL,HIGH' }}
+          format: sarif
+          output: trivy.sarif
+          cache-dir: .trivy-cache
+      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        if: always()
+        with:
+          sarif_file: trivy.sarif
